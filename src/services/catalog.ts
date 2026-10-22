@@ -1,265 +1,162 @@
-import type {
-  Store,
-  Product,
-  TryOnSession,
-  UsageEvent,
-  AppUser,
-  AnalyticsSummary,
-  ProductCategory,
-} from '../types';
-import { getDb, persist, uid } from '../data/store';
+import type { Store, Product, AnalyticsSummary, AppUser, TryOnSession } from '../types';
+import {
+  apiGetStores,
+  apiGetStoreBySlug,
+  apiCreateStore,
+  apiUpdateStore,
+  apiGetProduct,
+  apiGetStoreProducts,
+  apiCreateProduct,
+  apiUpdateProduct,
+  apiDeleteProduct,
+  apiGetAnalytics,
+  apiGetAllUsers,
+  apiToggleUserDisabled,
+  apiGetAllSessions,
+  apiGetFailedSessions,
+} from './api';
 
 // ---- Stores ----
 
-export function getStores(): Store[] {
-  return getDb().stores;
+export async function getStores(): Promise<Store[]> {
+  return apiGetStores();
 }
 
-export function getStoreBySlug(slug: string): Store | null {
-  return getDb().stores.find((s) => s.slug === slug) ?? null;
+export async function getStoreBySlug(slug: string): Promise<Store | null> {
+  try {
+    return await apiGetStoreBySlug(slug);
+  } catch {
+    return null;
+  }
 }
 
-export function getStoreById(id: string): Store | null {
-  return getDb().stores.find((s) => s.id === id) ?? null;
+export async function getStoresByOwner(_ownerId: string): Promise<Store[]> {
+  const all = await apiGetStores();
+  return all;
 }
 
-export function getStoresByOwner(ownerId: string): Store[] {
-  return getDb().stores.filter((s) => s.ownerId === ownerId);
+export async function createStore(data: {
+  name: string;
+  slug: string;
+  tagline: string;
+  description: string;
+  logoText: string;
+  bannerImage: string;
+}): Promise<Store> {
+  return apiCreateStore(data);
 }
 
-export function createStore(ownerId: string, data: { name: string; slug: string; tagline: string; description: string; logoText: string; bannerImage: string }): Store {
-  const db = getDb();
-  const store: Store = {
-    id: uid('s'),
-    slug: data.slug,
-    name: data.name,
-    tagline: data.tagline,
-    description: data.description,
-    logoText: data.logoText || data.name.charAt(0).toUpperCase(),
-    bannerImage: data.bannerImage,
-    ownerId,
-    createdAt: new Date().toISOString(),
-  };
-  db.stores.push(store);
-  persist();
-  return store;
-}
-
-export function updateStore(id: string, patch: Partial<Store>): Store | null {
-  const db = getDb();
-  const idx = db.stores.findIndex((s) => s.id === id);
-  if (idx < 0) return null;
-  db.stores[idx] = { ...db.stores[idx], ...patch };
-  persist();
-  return db.stores[idx];
+export async function updateStore(storeId: string, patch: {
+  name?: string;
+  tagline?: string;
+  description?: string;
+}): Promise<Store> {
+  return apiUpdateStore(storeId, patch);
 }
 
 // ---- Products ----
 
-export function getProducts(): Product[] {
-  return getDb().products;
+export async function getProducts(): Promise<Product[]> {
+  const stores = await apiGetStores();
+  const all: Product[] = [];
+  for (const s of stores) {
+    const prods = await apiGetStoreProducts(s.slug);
+    all.push(...prods);
+  }
+  return all;
 }
 
-export function getProductsByStore(storeId: string): Product[] {
-  return getDb().products.filter((p) => p.storeId === storeId);
+export async function getProductsByStore(slug: string): Promise<Product[]> {
+  return apiGetStoreProducts(slug);
 }
 
-export function getProductById(id: string): Product | null {
-  return getDb().products.find((p) => p.id === id) ?? null;
+export async function getProductsByStoreId(storeId: string): Promise<Product[]> {
+  const stores = await apiGetStores();
+  const store = stores.find((s) => s.id === storeId);
+  if (!store) return [];
+  return apiGetStoreProducts(store.slug);
 }
 
-export function createProduct(data: {
+export async function getProductById(id: string): Promise<Product | null> {
+  try {
+    return await apiGetProduct(id);
+  } catch {
+    return null;
+  }
+}
+
+export async function createProduct(data: {
   storeId: string;
   name: string;
   description: string;
-  category: ProductCategory;
+  category: string;
   price: number | null;
-  image: string;
+  image: File | null;
   variants: { color: string; colorHex: string; sizes: string[] }[];
-}): Product {
-  const db = getDb();
-  const product: Product = {
-    id: uid('p'),
+}): Promise<Product> {
+  return apiCreateProduct({
     storeId: data.storeId,
     name: data.name,
     description: data.description,
     category: data.category,
-    price: data.price,
+    price: data.price?.toString() ?? '',
+    variantsJson: JSON.stringify(data.variants),
     image: data.image,
-    variants: data.variants.map((v) => ({ id: uid('v'), ...v })),
-    createdAt: new Date().toISOString(),
-  };
-  db.products.push(product);
-  persist();
-  return product;
-}
-
-export function updateProduct(id: string, patch: Partial<Product>): Product | null {
-  const db = getDb();
-  const idx = db.products.findIndex((p) => p.id === id);
-  if (idx < 0) return null;
-  db.products[idx] = { ...db.products[idx], ...patch };
-  persist();
-  return db.products[idx];
-}
-
-export function deleteProduct(id: string): boolean {
-  const db = getDb();
-  const before = db.products.length;
-  db.products = db.products.filter((p) => p.id !== id);
-  persist();
-  return db.products.length < before;
-}
-
-// ---- Try-On sessions & usage ----
-
-export function createTryOnSession(data: {
-  productId: string;
-  storeId: string;
-  personImage: string;
-  consent: boolean;
-}): TryOnSession {
-  const db = getDb();
-  const session: TryOnSession = {
-    id: uid('t'),
-    productId: data.productId,
-    storeId: data.storeId,
-    personImage: data.personImage,
-    resultImage: null,
-    status: 'processing',
-    consent: data.consent,
-    createdAt: new Date().toISOString(),
-    completedAt: null,
-  };
-  db.tryOnSessions.push(session);
-
-  db.usageEvents.push({
-    id: uid('e'),
-    type: 'try_on_started',
-    storeId: data.storeId,
-    productId: data.productId,
-    sessionId: session.id,
-    createdAt: new Date().toISOString(),
   });
-  persist();
-  return session;
 }
 
-export function completeTryOnSession(id: string, resultImage: string): TryOnSession | null {
-  const db = getDb();
-  const idx = db.tryOnSessions.findIndex((s) => s.id === id);
-  if (idx < 0) return null;
-  db.tryOnSessions[idx] = {
-    ...db.tryOnSessions[idx],
-    status: 'completed',
-    resultImage,
-    completedAt: new Date().toISOString(),
-  };
-  db.usageEvents.push({
-    id: uid('e'),
-    type: 'try_on_completed',
-    storeId: db.tryOnSessions[idx].storeId,
-    productId: db.tryOnSessions[idx].productId,
-    sessionId: id,
-    createdAt: new Date().toISOString(),
-  });
-  persist();
-  return db.tryOnSessions[idx];
-}
-
-export function failTryOnSession(id: string): TryOnSession | null {
-  const db = getDb();
-  const idx = db.tryOnSessions.findIndex((s) => s.id === id);
-  if (idx < 0) return null;
-  db.tryOnSessions[idx] = {
-    ...db.tryOnSessions[idx],
-    status: 'failed',
-    completedAt: new Date().toISOString(),
-  };
-  db.usageEvents.push({
-    id: uid('e'),
-    type: 'try_on_failed',
-    storeId: db.tryOnSessions[idx].storeId,
-    productId: db.tryOnSessions[idx].productId,
-    sessionId: id,
-    createdAt: new Date().toISOString(),
-  });
-  persist();
-  return db.tryOnSessions[idx];
-}
-
-export function getTryOnSession(id: string): TryOnSession | null {
-  return getDb().tryOnSessions.find((s) => s.id === id) ?? null;
-}
-
-export function getSessionsByStore(storeId: string): TryOnSession[] {
-  return getDb().tryOnSessions.filter((s) => s.storeId === storeId);
-}
-
-export function recordProductView(storeId: string, productId: string): void {
-  const db = getDb();
-  db.usageEvents.push({
-    id: uid('e'),
-    type: 'product_viewed',
-    storeId,
+export async function updateProduct(productId: string, data: {
+  name?: string;
+  description?: string;
+  category?: string;
+  price?: number | null;
+  image?: File | null;
+  variants?: { color: string; colorHex: string; sizes: string[] }[];
+}): Promise<Product> {
+  return apiUpdateProduct({
     productId,
-    sessionId: null,
-    createdAt: new Date().toISOString(),
+    name: data.name,
+    description: data.description,
+    category: data.category,
+    price: data.price?.toString() ?? '',
+    variantsJson: data.variants ? JSON.stringify(data.variants) : undefined,
+    image: data.image ?? null,
   });
-  persist();
+}
+
+export async function deleteProduct(id: string): Promise<boolean> {
+  try {
+    await apiDeleteProduct(id);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ---- Analytics ----
 
-export function getAnalyticsForStore(storeId: string): AnalyticsSummary {
-  const db = getDb();
-  const sessions = db.tryOnSessions.filter((s) => s.storeId === storeId);
-  const totalTryOns = sessions.length;
-  const successful = sessions.filter((s) => s.status === 'completed').length;
-  const failed = sessions.filter((s) => s.status === 'failed').length;
-
-  const productCounts = new Map<string, number>();
-  for (const s of sessions) {
-    productCounts.set(s.productId, (productCounts.get(s.productId) ?? 0) + 1);
-  }
-  let mostTriedProduct: AnalyticsSummary['mostTriedProduct'] = null;
-  let maxCount = 0;
-  for (const [pid, count] of productCounts) {
-    if (count > maxCount) {
-      maxCount = count;
-      const product = db.products.find((p) => p.id === pid);
-      mostTriedProduct = { id: pid, name: product?.name ?? 'Unknown', count };
-    }
-  }
-
-  const recentSessions = [...sessions].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 10);
-
-  return { totalTryOns, successful, failed, mostTriedProduct, recentSessions };
+export async function getAnalyticsForStore(storeId: string): Promise<AnalyticsSummary> {
+  return apiGetAnalytics(storeId);
 }
 
 // ---- Users (admin) ----
 
-export function getAllUsers(): AppUser[] {
-  return getDb().users;
+export async function getAllUsers(): Promise<AppUser[]> {
+  return apiGetAllUsers();
 }
 
-export function getUserById(id: string): AppUser | null {
-  return getDb().users.find((u) => u.id === id) ?? null;
+export async function toggleUserDisabled(id: string): Promise<AppUser | null> {
+  try {
+    return await apiToggleUserDisabled(id);
+  } catch {
+    return null;
+  }
 }
 
-export function toggleUserDisabled(id: string): AppUser | null {
-  const db = getDb();
-  const idx = db.users.findIndex((u) => u.id === id);
-  if (idx < 0) return null;
-  db.users[idx] = { ...db.users[idx], disabled: !db.users[idx].disabled };
-  persist();
-  return db.users[idx];
+export async function getAllSessions(): Promise<TryOnSession[]> {
+  return apiGetAllSessions();
 }
 
-export function getAllSessions(): TryOnSession[] {
-  return getDb().tryOnSessions;
-}
-
-export function getFailedSessions(): TryOnSession[] {
-  return getDb().tryOnSessions.filter((s) => s.status === 'failed');
+export async function getFailedSessions(): Promise<TryOnSession[]> {
+  return apiGetFailedSessions();
 }

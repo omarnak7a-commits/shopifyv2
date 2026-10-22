@@ -1,16 +1,41 @@
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { getStoresByOwner, getProductsByStore, deleteProduct } from '../../services/catalog';
+import { getStoresByOwner, getProductsByStoreId, deleteProduct } from '../../services/catalog';
 import { SmartImage } from '../../components/SmartImage';
-import { Plus, Pencil, Trash2, ArrowRight } from 'lucide-react';
-import { useState } from 'react';
+import { Plus, Pencil, Trash2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import type { Store, Product } from '../../types';
 
 export default function DashboardProducts() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const stores = user ? getStoresByOwner(user.id) : [];
+  const [stores, setStores] = useState<Store[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const loadData = async (ownerId: string) => {
+    const s = await getStoresByOwner(ownerId);
+    setStores(s);
+    const primary = s[0];
+    if (primary) {
+      const p = await getProductsByStoreId(primary.id);
+      setProducts(p);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    if (!user) return;
+    setLoading(true);
+    loadData(user.id);
+  }, [user]);
+
+  if (loading) {
+    return <div className="w-8 h-8 border-2 border-line border-t-ink rounded-full animate-spin mx-auto mt-16" />;
+  }
+
   const primaryStore = stores[0];
-  const [version, setVersion] = useState(0);
 
   if (!primaryStore) {
     return (
@@ -23,14 +48,10 @@ export default function DashboardProducts() {
     );
   }
 
-  const products = getProductsByStore(primaryStore.id);
-  // Re-read after version bump
-  void version;
-
-  const handleDelete = (id: string, name: string) => {
+  const handleDelete = async (id: string, name: string) => {
     if (confirm(`Delete "${name}"? This can't be undone.`)) {
-      deleteProduct(id);
-      setVersion((v) => v + 1);
+      await deleteProduct(id);
+      setProducts((prev) => prev.filter((p) => p.id !== id));
     }
   };
 

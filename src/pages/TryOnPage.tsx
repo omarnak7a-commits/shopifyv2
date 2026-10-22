@@ -1,10 +1,11 @@
 import { useState, useRef, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { getStoreBySlug, getProductById, createTryOnSession, completeTryOnSession, failTryOnSession } from '../services/catalog';
-import { getTryOnProvider, TryOnError } from '../services/tryOnProvider';
+import { getStoreBySlug, getProductById } from '../services/catalog';
+import { performTryOn, TryOnError, resolveImageUrl } from '../services/tryOnProvider';
 import { SmartImage } from '../components/SmartImage';
 import { ArrowLeft, Upload, Download, RotateCcw, AlertCircle, Settings } from 'lucide-react';
+import type { Store, Product } from '../types';
 
 type Step = 'upload' | 'processing' | 'result' | 'error';
 
@@ -13,20 +14,32 @@ const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
 export default function TryOnPage() {
   const { slug, productId } = useParams<{ slug: string; productId: string }>();
-  const store = slug ? getStoreBySlug(slug) : null;
-  const product = productId ? getProductById(productId) : null;
+  const [store, setStore] = useState<Store | null>(null);
+  const [product, setProduct] = useState<Product | null>(null);
+  const [dataLoading, setDataLoading] = useState(true);
 
   const [step, setStep] = useState<Step>('upload');
   const [personImage, setPersonImage] = useState<string | null>(null);
+  const [personFile, setPersonFile] = useState<File | null>(null);
   const [consent, setConsent] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [resultImage, setResultImage] = useState<string | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [processingLabel, setProcessingLabel] = useState('Creating your look...');
   const [submitting, setSubmitting] = useState(false);
   const [errorDetail, setErrorDetail] = useState<{ title: string; message: string; isConfig: boolean } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const labelTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Load store + product
+  useState(() => {
+    if (!slug || !productId) return;
+    (async () => {
+      const s = await getStoreBySlug(slug);
+      const p = await getProductById(productId);
+      setStore(s);
+      setProduct(p);
+      setDataLoading(false);
+    })();
+  });
 
   const handleFile = useCallback((file: File) => {
     setFileError(null);
@@ -38,10 +51,9 @@ export default function TryOnPage() {
       setFileError('Image is too large. Please use one under 10MB.');
       return;
     }
+    setPersonFile(file);
     const reader = new FileReader();
-    reader.onload = () => {
-      setPersonImage(reader.result as string);
-    };
+    reader.onload = () => setPersonImage(reader.result as string);
     reader.readAsDataURL(file);
   }, []);
 
@@ -52,50 +64,35 @@ export default function TryOnPage() {
   }, [handleFile]);
 
   const startProcessing = async () => {
-    if (!personImage || !product || !store || submitting) return;
+    if (!personFile || !product || !store || submitting) return;
     setSubmitting(true);
-    const session = createTryOnSession({
-      productId: product.id,
-      storeId: store.id,
-      personImage,
-      consent,
-    });
-    setSessionId(session.id);
     setStep('processing');
 
-    // Cycle subtle loading labels
     const labels = ['Creating your look...', 'Almost there...', 'Putting it together...'];
     let labelIdx = 0;
     labelTimerRef.current = setInterval(() => {
       labelIdx = (labelIdx + 1) % labels.length;
-      setProcessingLabel(labels[labelIdx]);
     }, 1800);
 
     try {
-      const provider = getTryOnProvider();
-      const result = await provider.tryOn({
-        personImage,
-        garmentImage: product.image,
-        category: product.category,
-      });
+      const { resultUrl } = await performTryOn(personFile, product.id, consent);
       if (labelTimerRef.current) clearInterval(labelTimerRef.current);
-      completeTryOnSession(session.id, result.image);
-      setResultImage(result.image);
+      const url = resolveImageUrl(resultUrl);
+      setResultImage(url);
       setStep('result');
     } catch (err) {
       if (labelTimerRef.current) clearInterval(labelTimerRef.current);
-      failTryOnSession(session.id);
 
       if (err instanceof TryOnError && err.kind === 'not_configured') {
         setErrorDetail({
           title: 'Try-on is not configured yet.',
-          message: 'The virtual try-on service needs to be set up before it can be used. Please configure the FASHN API key.',
+          message: 'The virtual try-on service needs to be set up before it can be used.',
           isConfig: true,
         });
       } else if (err instanceof TryOnError && err.kind === 'auth') {
         setErrorDetail({
           title: 'Something went wrong.',
-          message: 'The try-on service API key is invalid or out of credits. Please check the configuration.',
+          message: 'The try-on service is not available. Please check the configuration.',
           isConfig: true,
         });
       } else if (err instanceof TryOnError && err.kind === 'timeout') {
@@ -120,16 +117,24 @@ export default function TryOnPage() {
 
   const reset = () => {
     setPersonImage(null);
+    setPersonFile(null);
     setResultImage(null);
-    setSessionId(null);
     setConsent(false);
     setErrorDetail(null);
     setStep('upload');
   };
 
+  if (dataLoading) {
+    return (
+      <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 py-24 text-center">
+        <div className="w-8 h-8 border-2 border-line border-t-ink rounded-full animate-spin mx-auto" />
+      </div>
+    );
+  }
+
   if (!store || !product) {
     return (
-      <div className="mx-auto max-w-wide px-4 sm:px-6 lg:px-8 py-24 text-center">
+      <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 py-24 text-center">
         <h1 className="text-3xl font-display font-semibold">Something went wrong</h1>
         <p className="mt-3 text-ink-muted">We couldn't find this product.</p>
         <Link to="/stores" className="mt-6 inline-flex btn-outline">
@@ -184,7 +189,7 @@ export default function TryOnPage() {
               <div className="relative rounded-sm overflow-hidden border border-line mb-4">
                 <img src={personImage} alt="Your uploaded photo" className="w-full max-h-[500px] object-contain bg-line/20" />
                 <button
-                  onClick={() => setPersonImage(null)}
+                  onClick={() => { setPersonImage(null); setPersonFile(null); }}
                   className="absolute top-3 right-3 btn-ghost text-sm bg-white/90 backdrop-blur-sm"
                 >
                   Remove
@@ -241,7 +246,7 @@ export default function TryOnPage() {
 
             <button
               onClick={startProcessing}
-              disabled={!personImage || !consent || submitting}
+              disabled={!personFile || !consent || submitting}
               className="btn-primary btn-lg w-full mt-6"
             >
               {submitting ? 'Starting...' : 'Continue'}
@@ -272,7 +277,7 @@ export default function TryOnPage() {
               </div>
             </div>
             <h2 className="text-2xl font-display font-medium text-ink mb-2">
-              {processingLabel}
+              Creating your look...
             </h2>
             <p className="text-ink-muted text-sm">This usually takes a few seconds.</p>
           </motion.div>
@@ -310,7 +315,7 @@ export default function TryOnPage() {
               </Link>
               <a
                 href={resultImage}
-                download={`tryonix-${product.name.toLowerCase().replace(/\s+/g, '-')}.jpg`}
+                download={`tryonix-${product.name.toLowerCase().replace(/\s+/g, '-')}.png`}
                 className="btn-primary flex-1"
               >
                 <Download size={18} /> Download

@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { getStoresByOwner, getProductById, createProduct, updateProduct } from '../../services/catalog';
 import { CATEGORIES, STANDARD_SIZES, type ProductCategory } from '../../types';
 import { ArrowLeft, Plus, X, Upload } from 'lucide-react';
+import type { Store, Product } from '../../types';
 
 interface VariantForm {
   color: string;
@@ -15,31 +16,54 @@ export default function DashboardProductForm() {
   const { productId } = useParams<{ productId: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
-  const stores = user ? getStoresByOwner(user.id) : [];
-  const primaryStore = stores[0];
-  const existingProduct = productId ? getProductById(productId) : null;
+  const [stores, setStores] = useState<Store[]>([]);
+  const [existingProduct, setExistingProduct] = useState<Product | null>(null);
+  const [loading, setLoading] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [imagePreview, setImagePreview] = useState('');
+  const [imageFile, setImageFile] = useState<File | null>(null);
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState<ProductCategory>('T-Shirts');
   const [price, setPrice] = useState('');
-  const [image, setImage] = useState('');
   const [variants, setVariants] = useState<VariantForm[]>([
     { color: '', colorHex: '#000000', sizes: ['S', 'M', 'L'] },
   ]);
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (existingProduct) {
-      setName(existingProduct.name);
-      setDescription(existingProduct.description);
-      setCategory(existingProduct.category);
-      setPrice(existingProduct.price?.toString() ?? '');
-      setImage(existingProduct.image);
-      setVariants(existingProduct.variants.map((v) => ({ color: v.color, colorHex: v.colorHex, sizes: v.sizes })));
-    }
-  }, [existingProduct]);
+    if (!user) return;
+    (async () => {
+      try {
+        const s = await getStoresByOwner(user.id);
+        setStores(s);
+        if (productId) {
+          const p = await getProductById(productId);
+          setExistingProduct(p);
+          if (p) {
+            setName(p.name);
+            setDescription(p.description);
+            setCategory(p.category);
+            setPrice(p.price?.toString() ?? '');
+            setImagePreview(p.image);
+            setVariants(p.variants.map((v) => ({ color: v.color, colorHex: v.colorHex, sizes: v.sizes })));
+          }
+        }
+      } catch {
+        // ignore
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [user, productId]);
+
+  if (loading) {
+    return <div className="w-8 h-8 border-2 border-line border-t-ink rounded-full animate-spin mx-auto mt-16" />;
+  }
+
+  const primaryStore = stores[0];
 
   if (!primaryStore) {
     return (
@@ -61,8 +85,9 @@ export default function DashboardProductForm() {
       setError('Image is too large. Please use one under 10MB.');
       return;
     }
+    setImageFile(file);
     const reader = new FileReader();
-    reader.onload = () => setImage(reader.result as string);
+    reader.onload = () => setImagePreview(reader.result as string);
     reader.readAsDataURL(file);
   };
 
@@ -80,7 +105,7 @@ export default function DashboardProductForm() {
     );
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -88,34 +113,41 @@ export default function DashboardProductForm() {
       setError('Please enter a product name.');
       return;
     }
-    if (!image) {
+    if (!imageFile && !existingProduct) {
       setError('Please upload a product image.');
       return;
     }
 
+    setSaving(true);
+
     const cleanVariants = variants.filter((v) => v.color.trim());
 
-    if (existingProduct) {
-      updateProduct(existingProduct.id, {
-        name: name.trim(),
-        description: description.trim(),
-        category,
-        price: price ? parseFloat(price) : null,
-        image,
-        variants: cleanVariants.map((v) => ({ id: '', color: v.color, colorHex: v.colorHex, sizes: v.sizes })),
-      });
-    } else {
-      createProduct({
-        storeId: primaryStore.id,
-        name: name.trim(),
-        description: description.trim(),
-        category,
-        price: price ? parseFloat(price) : null,
-        image,
-        variants: cleanVariants,
-      });
+    try {
+      if (existingProduct) {
+        await updateProduct(existingProduct.id, {
+          name: name.trim(),
+          description: description.trim(),
+          category,
+          price: price ? parseFloat(price) : null,
+          image: imageFile,
+          variants: cleanVariants.map((v) => ({ color: v.color, colorHex: v.colorHex, sizes: v.sizes })),
+        });
+      } else {
+        await createProduct({
+          storeId: primaryStore.id,
+          name: name.trim(),
+          description: description.trim(),
+          category,
+          price: price ? parseFloat(price) : null,
+          image: imageFile,
+          variants: cleanVariants,
+        });
+      }
+      navigate('/dashboard/products');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Something went wrong.');
+      setSaving(false);
     }
-    navigate('/dashboard/products');
   };
 
   return (
@@ -132,12 +164,12 @@ export default function DashboardProductForm() {
         {/* Image upload */}
         <div>
           <label className="label">Product image</label>
-          {image ? (
+          {imagePreview ? (
             <div className="relative inline-block">
-              <img src={image} alt="Product" className="w-40 h-52 object-cover rounded-sm border border-line" />
+              <img src={imagePreview} alt="Product" className="w-40 h-52 object-cover rounded-sm border border-line" />
               <button
                 type="button"
-                onClick={() => setImage('')}
+                onClick={() => { setImagePreview(''); setImageFile(null); }}
                 className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-ink text-canvas flex items-center justify-center"
               >
                 <X size={14} />
@@ -289,8 +321,8 @@ export default function DashboardProductForm() {
         )}
 
         <div className="flex gap-3 pt-4">
-          <button type="submit" className="btn-primary">
-            {existingProduct ? 'Save changes' : 'Add product'}
+          <button type="submit" disabled={saving} className="btn-primary">
+            {saving ? 'Saving...' : existingProduct ? 'Save changes' : 'Add product'}
           </button>
           <Link to="/dashboard/products" className="btn-ghost">
             Cancel

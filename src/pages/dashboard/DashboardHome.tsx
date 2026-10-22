@@ -1,11 +1,44 @@
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { getStoresByOwner, getProductsByStore, getAnalyticsForStore } from '../../services/catalog';
+import { getStoresByOwner, getProductsByStoreId, getAnalyticsForStore } from '../../services/catalog';
 import { Package, Sparkles, TrendingUp, Plus, ArrowRight } from 'lucide-react';
+import type { Store, Product, AnalyticsSummary } from '../../types';
 
 export default function DashboardHome() {
   const { user } = useAuth();
-  const stores = user ? getStoresByOwner(user.id) : [];
+  const [stores, setStores] = useState<Store[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [analytics, setAnalytics] = useState<AnalyticsSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      try {
+        const s = await getStoresByOwner(user.id);
+        setStores(s);
+        const primary = s[0];
+        if (primary) {
+          const [p, a] = await Promise.all([
+            getProductsByStoreId(primary.id),
+            getAnalyticsForStore(primary.id),
+          ]);
+          setProducts(p);
+          setAnalytics(a);
+        }
+      } catch {
+        // ignore
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [user]);
+
+  if (loading) {
+    return <div className="w-8 h-8 border-2 border-line border-t-ink rounded-full animate-spin mx-auto mt-16" />;
+  }
+
   const primaryStore = stores[0];
 
   if (!primaryStore) {
@@ -21,13 +54,10 @@ export default function DashboardHome() {
     );
   }
 
-  const products = getProductsByStore(primaryStore.id);
-  const analytics = getAnalyticsForStore(primaryStore.id);
-
   const stats = [
     { label: 'Products', value: products.length, icon: Package },
-    { label: 'Try-ons', value: analytics.totalTryOns, icon: Sparkles },
-    { label: 'Successful', value: analytics.successful, icon: TrendingUp },
+    { label: 'Try-ons', value: analytics?.totalTryOns ?? 0, icon: Sparkles },
+    { label: 'Successful', value: analytics?.successful ?? 0, icon: TrendingUp },
   ];
 
   return (
@@ -56,7 +86,7 @@ export default function DashboardHome() {
       </div>
 
       {/* Most tried */}
-      {analytics.mostTriedProduct && (
+      {analytics?.mostTriedProduct && (
         <div className="card p-6 mb-8">
           <p className="text-sm text-ink-muted mb-1">Most tried</p>
           <p className="text-xl font-display font-medium">{analytics.mostTriedProduct.name}</p>
@@ -67,7 +97,7 @@ export default function DashboardHome() {
       {/* Recent sessions */}
       <div>
         <h2 className="text-lg font-display font-medium mb-4">Recent try-on activity</h2>
-        {analytics.recentSessions.length === 0 ? (
+        {(!analytics?.recentSessions || analytics.recentSessions.length === 0) ? (
           <div className="card p-8 text-center">
             <p className="text-ink-muted text-sm">No try-ons yet. When customers try your products, they'll appear here.</p>
           </div>

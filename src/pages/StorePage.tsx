@@ -1,11 +1,37 @@
+import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { getStoreBySlug, getProductsByStore } from '../services/catalog';
 import { SmartImage } from '../components/SmartImage';
 import { ArrowLeft, ArrowRight } from 'lucide-react';
+import type { Store, Product } from '../types';
 
 export default function StorePage() {
   const { slug } = useParams<{ slug: string }>();
-  const store = slug ? getStoreBySlug(slug) : null;
+  const [store, setStore] = useState<Store | null>(null);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!slug) return;
+    (async () => {
+      setLoading(true);
+      const s = await getStoreBySlug(slug);
+      setStore(s);
+      if (s) {
+        const p = await getProductsByStore(s.slug);
+        setProducts(p);
+      }
+      setLoading(false);
+    })();
+  }, [slug]);
+
+  if (loading) {
+    return (
+      <div className="mx-auto max-w-wide px-4 sm:px-6 lg:px-8 py-24 text-center">
+        <div className="w-8 h-8 border-2 border-line border-t-ink rounded-full animate-spin mx-auto" />
+      </div>
+    );
+  }
 
   if (!store) {
     return (
@@ -18,8 +44,6 @@ export default function StorePage() {
       </div>
     );
   }
-
-  const products = getProductsByStore(store.id);
 
   return (
     <div>

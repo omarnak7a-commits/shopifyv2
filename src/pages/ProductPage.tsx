@@ -1,24 +1,40 @@
-import { useParams, Link } from 'react-router-dom';
 import { useEffect, useState } from 'react';
-import { getStoreBySlug, getProductById, recordProductView } from '../services/catalog';
+import { useParams, Link } from 'react-router-dom';
+import { getStoreBySlug, getProductById } from '../services/catalog';
 import { SmartImage } from '../components/SmartImage';
 import { ArrowLeft, ArrowRight, Check } from 'lucide-react';
+import type { Store, Product } from '../types';
 
 export default function ProductPage() {
   const { slug, productId } = useParams<{ slug: string; productId: string }>();
-  const store = slug ? getStoreBySlug(slug) : null;
-  const product = productId ? getProductById(productId) : null;
+  const [store, setStore] = useState<Store | null>(null);
+  const [product, setProduct] = useState<Product | null>(null);
+  const [loading, setLoading] = useState(true);
   const [selectedVariant, setSelectedVariant] = useState(0);
   const [selectedSize, setSelectedSize] = useState('');
 
   useEffect(() => {
-    if (store && product) {
-      recordProductView(store.id, product.id);
-      if (product.variants.length > 0) {
-        setSelectedSize(product.variants[0].sizes[0] ?? '');
+    if (!slug || !productId) return;
+    (async () => {
+      setLoading(true);
+      const s = await getStoreBySlug(slug);
+      const p = await getProductById(productId);
+      setStore(s);
+      setProduct(p);
+      if (p && p.variants.length > 0) {
+        setSelectedSize(p.variants[0].sizes[0] ?? '');
       }
-    }
-  }, [store, product]);
+      setLoading(false);
+    })();
+  }, [slug, productId]);
+
+  if (loading) {
+    return (
+      <div className="mx-auto max-w-wide px-4 sm:px-6 lg:px-8 py-24 text-center">
+        <div className="w-8 h-8 border-2 border-line border-t-ink rounded-full animate-spin mx-auto" />
+      </div>
+    );
+  }
 
   if (!store || !product) {
     return (
