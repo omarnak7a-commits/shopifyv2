@@ -1,6 +1,5 @@
 import os
 import sys
-import tempfile
 import shutil
 from pathlib import Path
 
@@ -8,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 os.environ["TRYON_PROVIDER"] = "mock"
-os.environ["DATABASE_URL"] = "sqlite:///./test_tryonix.db"
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["JWT_SECRET"] = "test-secret"
 os.environ["STORAGE_DIR"] = "./test_storage"
 
@@ -18,13 +17,24 @@ sys.path.insert(0, str(backend_dir))
 
 @pytest.fixture(scope="function")
 def client():
-    from app.database import Base, engine, SessionLocal
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+    from app.database import Base
     from app.seed import seed_database
     from app.main import app
+    from app import database as db_module
 
-    Base.metadata.drop_all(bind=engine)
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    db_module.engine = engine
+    db_module.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
     Base.metadata.create_all(bind=engine)
-    db = SessionLocal()
+    db = db_module.SessionLocal()
     try:
         seed_database(db)
     finally:
@@ -37,9 +47,6 @@ def client():
     storage = Path("./test_storage")
     if storage.exists():
         shutil.rmtree(storage)
-    db_file = Path("./test_tryonix.db")
-    if db_file.exists():
-        db_file.unlink()
 
 
 @pytest.fixture
